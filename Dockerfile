@@ -15,8 +15,6 @@ ARG CONTAINER_USER_UID=1000
 # If Oracle JDK is not available for the platform, 
 # openjdk is installed as a fallback.
 ARG USE_ORACLE_JDK=true
-# Install TypeScript packages
-ARG INSTALL_TYPESCRIPT=true
 
 
 ##################
@@ -32,14 +30,13 @@ FROM scratch
 
 
 ##################
-## system dependencies stage
+## dependencies stage
 ##################
 # this stage installs all system dependencies as the root user
-FROM base-${TARGETARCH} AS sys-deps
-
+FROM base-${TARGETARCH} AS base-dependencies
 ARG USE_ORACLE_JDK
-ARG INSTALL_TYPESCRIPT
-
+ARG CONTAINER_USER
+ARG CONTAINER_USER_UID
 USER root
 
 # Preconfigure debconf for non-interactive installation - otherwise complains about terminal
@@ -58,13 +55,12 @@ RUN apt-get install --no-install-recommends -y -q apt-utils 2>&1 \
 RUN apt-get install --no-install-recommends -y -q \
     ca-certificates \
     apt-transport-https \
-    pkg-config \
-    lsb-release \
     gpg \
     gpg-agent \
     dirmngr \
+    lsb-release \
     curl \
-    wget
+    nano
 
 # configure locales
 RUN apt-get install --no-install-recommends -y -q locales
@@ -76,25 +72,89 @@ RUN apt-get install --no-install-recommends -y -q \
     build-essential \
     gcc \
     cmake
+RUN gcc --version
 
 # system python
 ENV PYTHONDONTWRITEBYTECODE=1
-RUN apt-get update -y -q
 RUN apt-get install --no-install-recommends -y -q \
     python3-dev \
     python3-pip \
     python3-venv
+RUN python3 -m pip install --no-warn-script-location --upgrade --user \
+    pip \
+    setuptools
+RUN pip3 install --no-warn-script-location --upgrade --user \
+    virtualenv \
+    pylint
+RUN update-alternatives --install /usr/bin/python python /usr/bin/python3 1
+RUN python --version
 
 # git
 RUN apt-get install --no-install-recommends -y -q \
     git
 
-# LF & RTI depencencies
+# lfc, lingo and python dependencies
 RUN apt-get install --no-install-recommends -y -q \
     libssl-dev \
-    libffi-dev
+    libffi-dev \
+    pkg-config
 
-# java
+# openssh server (for remote development)
+RUN apt-get install --no-install-recommends -y -q \
+    openssh-server
+
+# apt cleanup
+RUN apt-get autoremove -y -q
+RUN apt-get clean -y -q
+RUN rm -rf /var/lib/apt/lists/*
+
+# add the container user and create a cache directory with appropriate permissions
+RUN adduser --disabled-password --gecos "" --uid ${CONTAINER_USER_UID} ${CONTAINER_USER}
+RUN mkdir -p /var/cache/lf-lang
+RUN chown ${CONTAINER_USER}:${CONTAINER_USER} /var/cache/lf-lang
+
+# run subsequent commands as container user
+USER ${CONTAINER_USER}
+# ensure .local/bin is in PATH
+RUN mkdir -p /home/${CONTAINER_USER}/.local/bin
+ENV PATH="${PATH}:/home/${CONTAINER_USER}/.local/bin"
+# setup .ssh server
+RUN mkdir -p /home/${CONTAINER_USER}/.ssh
+RUN touch /home/${CONTAINER_USER}/.ssh/authorized_keys
+RUN chmod 600 /home/${CONTAINER_USER}/.ssh/authorized_keys
+
+
+####################
+#  system RTI stage
+####################
+# see https://github.com/lf-lang/reactor-c/tree/main/core/federated/RTI
+# produces artifact /usr/local/bin/RTI which is a standalone application
+FROM base-dependencies as rti
+ARG CONTAINER_USER
+USER root
+RUN git clone \
+    -c advice.detachedHead=false \
+    --single-branch \
+    --depth 1 \
+    https://github.com/lf-lang/reactor-c \
+    /var/cache/lf-lang/reactor-c
+RUN mkdir -p /var/cache/lf-lang/reactor-c/core/federated/RTI/build
+RUN (cd /var/cache/lf-lang/reactor-c/core/federated/RTI/build && cmake -DAUTH=on ..)
+RUN (cd /var/cache/lf-lang/reactor-c/core/federated/RTI/build && make)
+RUN (cd /var/cache/lf-lang/reactor-c/core/federated/RTI/build && make install)
+RUN rm -rf /var/cache/lf-lang/reactor-c
+# verify RTI is available to container user
+USER ${CONTAINER_USER}
+# RTI doesn't have a --version flag, so check usage for expected phrase (rc will be nonzero)
+RUN RTI | grep "federate"
+
+
+####################
+#  system Java stage
+####################
+FROM base-dependencies as java
+ARG ${CONTAINER_USER}
+USER root
 # set up repositories for Oracle (but install only if USE_ORACLE_JDK is true)
 RUN mkdir -p /usr/share/keyrings/
 RUN gpg --recv-keys --keyserver keyserver.ubuntu.com EA8CACC073C3DB2A
@@ -112,95 +172,35 @@ RUN if ${USE_ORACLE_JDK} && [ "$(uname -m)" != "armv7l" ] && [ "$(uname -m)" != 
     ; else apt-get install --no-install-recommends -y -q \
         openjdk-17-jdk \
     ; fi
-
-# TypeScript
-RUN if ${INSTALL_TYPESCRIPT} && [ "$(uname -m)" != "riscv64" ]; then \
-    apt-get install --no-install-recommends -y -q  \
-        nodejs \
-        npm \
-        node-typescript; \
-    fi
-
 # apt cleanup
 RUN apt-get autoremove -y -q
 RUN apt-get clean -y -q
 RUN rm -rf /var/lib/apt/lists/*
-
-# create cache directory used by later stages
-RUN mkdir -p /var/cache/lf-lang
-
-
-####################
-#  RTI stage
-####################
-# see https://github.com/lf-lang/reactor-c/tree/main/core/federated/RTI
-# produces artifact /usr/local/bin/RTI which is a standalone application
-FROM sys-deps as rti
-USER root
-RUN git clone \
-    --single-branch \
-    --depth 1 \
-    https://github.com/lf-lang/reactor-c \
-    /var/cache/lf-lang/reactor-c
-RUN mkdir -p /var/cache/lf-lang/reactor-c/core/federated/RTI/build
-RUN (cd /var/cache/lf-lang/reactor-c/core/federated/RTI/build && cmake -DAUTH=on ..)
-RUN (cd /var/cache/lf-lang/reactor-c/core/federated/RTI/build && make)
-RUN (cd /var/cache/lf-lang/reactor-c/core/federated/RTI/build && make install)
-RUN rm -rf /var/cache/lf-lang/reactor-c
-
-
-####################
-# user dependencies stage
-####################
-# this stage installs user dependencies for the container user
-# user install stages should derive from this container
-FROM sys-deps as user-deps
-
-ARG CONTAINER_USER
-ARG CONTAINER_USER_UID
-
-# add the container user and create a cache directory with appropriate permissions
-USER root
-RUN adduser --disabled-password --gecos "" --uid ${CONTAINER_USER_UID} ${CONTAINER_USER}
-RUN mkdir -p /var/cache/lf-lang
-RUN chown ${CONTAINER_USER}:${CONTAINER_USER} /var/cache/lf-lang
-
-# run subsequent commands as container user
+# verify java is available to container user
 USER ${CONTAINER_USER}
+RUN java --version
 
-# install python dependencies
-ENV PYTHONDONTWRITEBYTECODE=1
-RUN pip3 install --no-warn-script-location --upgrade --user \
-    pip \
-    setuptools
-RUN pip3 install --no-warn-script-location --upgrade --user \
-    virtualenv \
-    pylint
 
-# ensure .local/bin is in PATH
-RUN mkdir -p /home/${CONTAINER_USER}/.local/bin
-ENV PATH="${PATH}:/home/${CONTAINER_USER}/.local/bin"
-RUN echo "export PATH=${PATH}:/home/${CONTAINER_USER}/.local/bin" >> /home/${CONTAINER_USER}/.bashrc
+####################
+# user lfc stage
+####################
+FROM java as lfc
+ARG CONTAINER_USER
+USER ${CONTAINER_USER}
+RUN curl -Ls https://install.lf-lang.org | bash -s cli
+RUN lfc --version
 
 
 ####################
 # user rust stage
 ####################
-FROM user-deps as rust
+FROM base-dependencies as rust
 ARG CONTAINER_USER
 USER ${CONTAINER_USER}
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | bash -s -- -y
 ENV PATH="${PATH}:/home/${CONTAINER_USER}/.cargo/bin"
+RUN rustc --version
 
-
-####################
-# user LFC stage
-####################
-FROM user-deps as lfc
-ARG CONTAINER_USER
-USER ${CONTAINER_USER}
-RUN curl -Ls https://install.lf-lang.org | bash -s cli
- 
 
 #####################
 # user Lingo stage
@@ -218,6 +218,7 @@ RUN git ls-remote --refs --sort='version:refname' \
     > /var/cache/lf-lang/lingo-version
 # pull latest release tag
 RUN git clone \
+    -c advice.detachedHead=false \
     --single-branch \
     --depth 1 \
     --branch $(cat /var/cache/lf-lang/lingo-version) \
@@ -226,34 +227,7 @@ RUN git clone \
 # install lingo and cleanup
 RUN /home/${CONTAINER_USER}/.cargo/bin/cargo install --path /var/cache/lf-lang/lingo
 RUN rm -rf /var/cache/lf-lang/lingo
-
-
-####################
-## test stages
-####################
-FROM sys-deps as test-gcc
-RUN gcc --version > /var/cache/lf-lang/gcc-version
-
-FROM sys-deps as test-java
-RUN java --version > /var/cache/lf-lang/java-version
-
-FROM sys-deps as test-ts
-RUN if $(which tsc); then \
-        tsc --version > /var/cache/lf-lang/tsc-version; \
-    else touch /var/cache/lf-lang/tsc-version; \
-    fi
-
-FROM user-deps as test-python
-RUN python3 --version > /var/cache/lf-lang/python-version
-
-FROM rust as test-rust
-RUN rustc --version > /var/cache/lf-lang/rustc-version
-
-FROM lfc as test-lfc
-RUN lfc --version > /var/cache/lf-lang/lfc-version
-
-FROM lingo as test-lingo
-RUN lingo --version > /var/cache/lf-lang/lingo-version
+RUN lingo --version
 
 
 ####################
@@ -261,25 +235,40 @@ RUN lingo --version > /var/cache/lf-lang/lingo-version
 ####################
 FROM base-${TARGETARCH} as app
 LABEL maintainer="xronos-inc"
-LABEL source="https://github.com/xronos-inc/lfc-remote-ssh"
+LABEL source="https://github.com/xronos-inc/lf-dev-docker"
 ARG CONTAINER_USER
 USER ${CONTAINER_USER}
 
-# copy output from previous test stages to enforce they are built and run
-COPY --from=test-gcc      /var/cache/lf-lang/gcc-version     /var/cache/lf-lang/gcc-version
-COPY --from=test-java     /var/cache/lf-lang/java-version    /var/cache/lf-lang/java-version
-COPY --from=test-ts       /var/cache/lf-lang/tsc-version     /var/cache/lf-lang/tsc-version
-COPY --from=test-python   /var/cache/lf-lang/python-version  /var/cache/lf-lang/python-version
-COPY --from=test-rust     /var/cache/lf-lang/rustc-version   /var/cache/lf-lang/rustc-version
-COPY --from=test-lfc      /var/cache/lf-lang/lfc-version     /var/cache/lf-lang/lfc-version
-COPY --from=test-lingo    /var/cache/lf-lang/lingo-version   /var/cache/lf-lang/lingo-version
+EXPOSE 22
 
 # copy from previous build stages
-COPY --from=user-deps / /
-COPY --from=rti /usr/local/bin/RTI /usr/local/bin/RTI
-COPY --from=rust /home/${CONTAINER_USER}/.cargo/bin /home/${CONTAINER_USER}/.cargo/bin
-COPY --from=lfc /home/${CONTAINER_USER}/.local/bin /home/${CONTAINER_USER}/.local/bin
-COPY --from=lfc /home/${CONTAINER_USER}/.local/share/lingua-franca /home/${CONTAINER_USER}/.local/share/lingua-franca
-COPY --from=lingo /home/${CONTAINER_USER}/.cargo/bin /home/${CONTAINER_USER}/.cargo/bin
+COPY --from=java   / /
+COPY --from=rti    /usr/local/bin/RTI /usr/local/bin/RTI
+COPY --from=lfc    /home/${CONTAINER_USER}/.local/bin /home/${CONTAINER_USER}/.local/bin
+COPY --from=lfc    /home/${CONTAINER_USER}/.local/share/lingua-franca /home/${CONTAINER_USER}/.local/share/lingua-franca
+COPY --from=rust   /home/${CONTAINER_USER}/.cargo /home/${CONTAINER_USER}/.cargo
+COPY --from=rust   /home/${CONTAINER_USER}/.rustup /home/${CONTAINER_USER}/.rustup
+COPY --from=lingo  /home/${CONTAINER_USER}/.cargo/bin /home/${CONTAINER_USER}/.cargo/bin
+
+# configure rust environment variables
+ENV PATH="${PATH}:/home/${CONTAINER_USER}/.cargo/bin"
+RUN echo PATH="\${PATH}:/home/${CONTAINER_USER}/.cargo/bin" >> /home/${CONTAINER_USER}/.bashrc
+
+# configure lfc environment variables
+ENV PATH=${PATH}:/home/${CONTAINER_USER}/.local/bin
+RUN echo PATH="\${PATH}:/home/${CONTAINER_USER}/.local/bin" >> /home/${CONTAINER_USER}/.bashrc
+
+# test all packages
+RUN gcc --version \
+    && g++ --version \
+    && make --version \
+    && cmake --version \
+    && python --version \
+    && rustc --version \
+    && cargo --version \
+    && lfc --version \
+    && lingo --version \
+    && RTI | grep "federates"
+# RTI does not have a --version flag, so grep usage output (rc will be nonzero)
 
 ENTRYPOINT ["lfc"]
