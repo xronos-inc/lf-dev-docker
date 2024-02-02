@@ -61,6 +61,8 @@ docker inspect --format='{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}
 
 Once the container is started, connect to the remote target from VS Code on your host. See [Remote Development](https://code.visualstudio.com/docs/remote/ssh) for more information.
 
+If your docker container is running on a remote system, such as an EC2 instance, SSH port 22 may be blocked. In this case, you can map the container port 22 to an alternate port on the remote host. Add flag `-p 2222:22` to the `docker run` command above, and configure your SSH session to connect via port 2222. Ensure the remote host has opened this port on its firewall.
+
 
 ## Arguments
 

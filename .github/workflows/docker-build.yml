@@ -4,17 +4,12 @@ on:
   push:
     branches:
       - main
+      - github-workflows
 
 jobs:
   docker-build:
     runs-on: ubuntu-22.04
     steps:
-      context:
-      # print build context
-      - run: echo "The job was automatically triggered by a ${{ github.event_name }} event."
-      - run: echo "This job is now running on a ${{ runner.os }} server hosted by GitHub."
-      - run: echo "The name of this branch is ${{ github.ref }} and this repository is ${{ github.repository }}."
-
       - name: Setup QEMU
         uses: docker/setup-qemu-action@v3
 
@@ -27,57 +22,14 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      - name: Check out repository
+      - name: Check out Github repository
         uses: actions/checkout@v4
         with:
           fetch-depth: 1
       
-      - name: Build platform linux/amd64
+      - name: Docker build and push all platforms
         uses: docker/build-push-action@v5
         with:
-          context: ./docker/
-          platforms: linux/amd64
+          platforms: linux/amd64,linux/arm64,linux/arm/v7,linux/riscv64
           push: true
-          tags: xronosinc/lfc-linux-amd64:latest
-
-      - name: Build platform linux/arm64
-        uses: docker/build-push-action@v5
-        with:
-          context: ./docker/
-          platforms: linux/arm64
-          push: true
-          tags: xronosinc/lfc-linux-arm64:latest
-
-      - name: Build platform linux/arm/v7
-        uses: docker/build-push-action@v5
-        with:
-          context: ./docker/
-          platforms: linux/arm/v7
-          push: true
-          build-args:
-            - USE_ORACLE_JDK: false
-          tags: xronosinc/lfc-linux-armv7:latest
-
-      - name: Build platform linux/riscv64
-        uses: docker/build-push-action@v5
-        with:
-          context: ./docker/
-          platforms: linux/riscv64
-          build-args:
-            - BASEIMAGE: riscv64/ubuntu:22.04
-            - USE_ORACLE_JDK: false
-            - INSTALL_TYPESCRIPT: false
-          push: true
-          tags: xronosinc/lfc-linux-riscv64:latest
-
-      - name: Append images and push
-        run: |
-          docker buildx imagetools create \
-            --tag xronosinc/lfc:latest \
-            --append xronosinc/lfc-linux-amd64:latest
-            --append xronosinc/lfc-linux-arm64:latest
-            --append xronosinc/lfc-linux-armv7:latest
-            --append xronosinc/lfc-linux-riscv64:latest
-      
-      - name: Inspect image
-        run: docker buildx imagetools inspect --verbose xronosinc/lfc:latest
+          tags: xronosinc/lf:unstable
