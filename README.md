@@ -48,20 +48,23 @@ The lfc compiler is the default entrypoint. Any additional arguments from the do
 You can connect to the container and develop using VS Code on your host system. You'll need to use an SSH key to establish a connection to the container.
 
 ```shell
-docker run --name lf --expose 22 --interactive --tty --detach --user root --entrypoint /usr/sbin/sshd xronosinc/lf:latest -D
+docker run --name lf -p 2222:22 --interactive --tty --detach --user root --entrypoint /usr/sbin/sshd xronosinc/lf:latest -D
 docker exec -it lf sh -c "echo $(cat ~/.ssh/id_rsa.pub) >> /home/ubuntu/.ssh/authorized_keys"
 ```
 
 You may want to map local volume which contains your source code repositories into the container. Add flag `-v /path/to/local/code:/home/ubuntu/code` to the `docker run` command above.
 
-Query the IP address of the docker container with
+SSH into the container:
+```shell
+ssh -p 2222 ubuntu@localhost
+```
+
+You may query the IP address of the docker container with
 ```shell
 docker inspect --format='{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' lf
 ```
 
 Once the container is started, connect to the remote target from VS Code on your host. See [Remote Development](https://code.visualstudio.com/docs/remote/ssh) for more information.
-
-If your docker container is running on a remote system, such as an EC2 instance, SSH port 22 may be blocked. In this case, you can map the container port 22 to an alternate port on the remote host. Add flag `-p 2222:22` to the `docker run` command above, and configure your SSH session to connect via port 2222. Ensure the remote host has opened this port on its firewall.
 
 
 ## Arguments
