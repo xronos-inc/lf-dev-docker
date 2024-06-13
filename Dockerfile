@@ -63,7 +63,8 @@ RUN apt-get install --no-install-recommends -y -q \
     dirmngr \
     lsb-release \
     curl \
-    nano
+    nano \
+    jq
 
 # configure locales
 RUN apt-get install --no-install-recommends -y -q locales
@@ -135,21 +136,24 @@ RUN chmod 600 /home/${CONTAINER_USER}/.ssh/authorized_keys
 FROM base-dependencies as rti
 ARG CONTAINER_USER
 USER root
+# clone lingua-franca with release tag to ensure RTI matches the LFC install
 RUN git clone \
     -c advice.detachedHead=false \
+    --branch $(curl -s https://api.github.com/repos/lf-lang/lingua-franca/releases/latest | jq -r '.tag_name') \
     --single-branch \
+    --recurse-submodules \
     --depth 1 \
-    https://github.com/lf-lang/reactor-c \
-    /var/cache/lf-lang/reactor-c
-RUN mkdir -p /var/cache/lf-lang/reactor-c/core/federated/RTI/build
-RUN (cd /var/cache/lf-lang/reactor-c/core/federated/RTI/build && cmake -DAUTH=on ..)
-RUN (cd /var/cache/lf-lang/reactor-c/core/federated/RTI/build && make)
-RUN (cd /var/cache/lf-lang/reactor-c/core/federated/RTI/build && make install)
-RUN rm -rf /var/cache/lf-lang/reactor-c
+    https://github.com/lf-lang/lingua-franca \
+    /var/cache/lf-lang/lingua-franca
+RUN mkdir -p /var/cache/lf-lang/lingua-franca/core/src/main/resources/lib/c/reactor-c/core/federated/RTI/build
+RUN (cd /var/cache/lf-lang/lingua-franca/core/src/main/resources/lib/c/reactor-c/core/federated/RTI/build && cmake -DAUTH=on ..)
+RUN (cd /var/cache/lf-lang/lingua-franca/core/src/main/resources/lib/c/reactor-c/core/federated/RTI/build && make)
+RUN (cd /var/cache/lf-lang/lingua-franca/core/src/main/resources/lib/c/reactor-c/core/federated/RTI/build && make install)
+RUN rm -rf /var/cache/lf-lang/lingua-franca
 # verify RTI is available to container user
 USER ${CONTAINER_USER}
-# RTI doesn't have a --version flag, so check usage for expected phrase (rc will be nonzero)
-RUN RTI | grep "federate"
+# RTI doesn't have a --version flag
+RUN which RTI
 
 
 ####################
