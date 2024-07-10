@@ -275,7 +275,7 @@ RUN gcc --version \
     && cargo --version \
     && lfc --version \
     && lingo --version \
-    && RTI | grep "federates"
-# RTI does not have a --version flag, so grep usage output (rc will be nonzero)
+    && which RTI
+    # RTI does not have a --version flag, so simply test it is in the system path
 
 ENTRYPOINT ["lfc"]
